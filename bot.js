@@ -1,4 +1,4 @@
-aconst { io } = require("socket.io-client");
+const { io } = require("socket.io-client");
 
 const SERVER_URL = "https://classic.talkomatic.co";
 const BOT_TOKEN = "tk_0c37ae4c5e6f3c2b28f616d84e87437b521d3b868822e532608e2454c2a597ea";
