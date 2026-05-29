@@ -3,7 +3,7 @@ const { io } = require("socket.io-client");
 const SERVER_URL = "https://classic.talkomatic.co";
 const BOT_TOKEN = "tk_0c37ae4c5e6f3c2b28f616d84e87437b521d3b868822e532608e2454c2a597ea";
 const OPENROUTER_API_KEY = "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";
-const ROOM_ID = "746594";
+const ROOM_ID = "517801";
 
 // ✅ Modelos gratuitos actualizados Mayo 2026
 const MODELS = [
