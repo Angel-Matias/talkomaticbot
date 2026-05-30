@@ -3,7 +3,7 @@ const { io } = require("socket.io-client");
 const SERVER_URL = "https://classic.talkomatic.co";
 const BOT_TOKEN = "tk_0c37ae4c5e6f3c2b28f616d84e87437b521d3b868822e532608e2454c2a597ea";
 const CF_ACCOUNT_ID = "b72377f238161daf45392c0103b56281";
-const CF_API_TOKEN = "cfut_1VvHludJHpkOEGWPhYO4Ip6Bvquz0nTY01QCLHMAa4224900";
+const CF_API_TOKEN = "cfut_icMGh2VPOSIygUDAHdpT0EjExP0Yt9vsZkcuvcnJcff674d7";
 const ROOM_ID = "925527";
 
 const socket = io(SERVER_URL, {
