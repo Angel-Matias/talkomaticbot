@@ -2,17 +2,9 @@ const { io } = require("socket.io-client");
 
 const SERVER_URL = "https://classic.talkomatic.co";
 const BOT_TOKEN = "tk_0c37ae4c5e6f3c2b28f616d84e87437b521d3b868822e532608e2454c2a597ea";
-const OPENROUTER_API_KEY = "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";
-const ROOM_ID = "522872";
-
-// ✅ Modelos gratuitos actualizados Mayo 2026
-const MODELS = [
-  "openrouter/auto",                           // elige automáticamente el mejor free
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "deepseek/deepseek-chat:free",
-  "qwen/qwen3-8b:free",
-  "nvidia/llama-3.1-nemotron-nano-8b-v1:free",
-];
+const CF_ACCOUNT_ID = "b72377f238161daf45392c0103b56281";
+const CF_API_TOKEN = "cfut_1VvHludJHpkOEGWPhYO4Ip6Bvquz0nTY01QCLHMAa4224900";
+const ROOM_ID = "925527";
 
 const socket = io(SERVER_URL, {
   auth: { token: BOT_TOKEN },
@@ -22,9 +14,112 @@ const socket = io(SERVER_URL, {
 
 let myUsername = null;
 let isInRoom = false;
-const userBuffers = {};
-const TYPING_TIMEOUT = 2000;
 
+// ───────────────────────────────────────────
+// MEMORIA - historial compartido de toda la sala
+// Guarda los últimos 30 mensajes de todos los usuarios
+// ───────────────────────────────────────────
+const conversationHistory = [];
+const MAX_HISTORY = 30;
+
+function addToHistory(role, username, content) {
+  conversationHistory.push({ role, username, content });
+  if (conversationHistory.length > MAX_HISTORY) {
+    conversationHistory.shift();
+  }
+}
+
+function buildMessages(currentUsername, currentText) {
+  const messages = [
+    {
+      role: "system",
+      content: `You are a female AI chat bot on Talkomatic chatting with multiple people at once. 
+You remember everything said in the conversation. 
+When someone asks you to repeat something, you can do it because you remember.
+Respond naturally and briefly like a real girl chatting. Maximum 2 sentences. Always write in English.
+When addressing someone, use their username so they know you're talking to them.`
+    }
+  ];
+
+  // ✅ Agregar todo el historial de conversación
+  for (const entry of conversationHistory) {
+    if (entry.role === "user") {
+      messages.push({
+        role: "user",
+        content: `${entry.username}: ${entry.content}`
+      });
+    } else {
+      messages.push({
+        role: "assistant",
+        content: entry.content
+      });
+    }
+  }
+
+  // ✅ Agregar el mensaje actual
+  messages.push({
+    role: "user",
+    content: `${currentUsername}: ${currentText}`
+  });
+
+  return messages;
+}
+
+// ───────────────────────────────────────────
+// COLA DE MENSAJES
+// ───────────────────────────────────────────
+const messageQueue = [];
+let isProcessing = false;
+const processedMessages = {};
+
+async function processQueue() {
+  if (isProcessing || messageQueue.length === 0) return;
+  isProcessing = true;
+
+  const { username, location, text, timestamp } = messageQueue.shift();
+  console.log(`⏳ Procesando mensaje de ${username} (${new Date(timestamp).toLocaleTimeString()}): ${text}`);
+
+  // ✅ Guardar el mensaje del usuario en el historial
+  addToHistory("user", username, text);
+
+  try {
+    const reply = await askAI(username, text);
+    if (reply) {
+      console.log("🤖 Respondiendo:", reply);
+
+      // ✅ Guardar la respuesta de la IA en el historial
+      addToHistory("assistant", "GeminiBot", reply);
+
+      const chunks = reply.match(/.{1,200}/g) || [];
+      for (const chunk of chunks) {
+        socket.emit("chat update", {
+          diff: { type: "full-replace", text: chunk }
+        });
+        await new Promise(r => setTimeout(r, 300));
+      }
+
+      if (messageQueue.length > 0) {
+        console.log(`📋 Hay ${messageQueue.length} mensaje(s) en cola, borrando en 5s...`);
+        await new Promise(r => setTimeout(r, 5000));
+        socket.emit("chat update", {
+          diff: { type: "full-replace", text: "" }
+        });
+        await new Promise(r => setTimeout(r, 500));
+      } else {
+        console.log("📭 Cola vacía, dejando respuesta visible...");
+      }
+    }
+  } catch (err) {
+    console.error("❌ Error consultando IA:", err.message);
+  }
+
+  isProcessing = false;
+  processQueue();
+}
+
+// ───────────────────────────────────────────
+// INTERCEPTOR
+// ───────────────────────────────────────────
 const originalOnevent = socket.onevent;
 socket.onevent = function(packet) {
   const eventName = packet.data?.[0];
@@ -34,6 +129,9 @@ socket.onevent = function(packet) {
   originalOnevent.call(this, packet);
 };
 
+// ───────────────────────────────────────────
+// CONEXIÓN
+// ───────────────────────────────────────────
 socket.on("connect", () => {
   console.log("✅ Conectado a Talkomatic");
   socket.emit("join lobby", { username: "GeminiBot", location: "Servidor Ángel" });
@@ -48,6 +146,9 @@ socket.on("disconnect", (reason) => {
   isInRoom = false;
 });
 
+// ───────────────────────────────────────────
+// AUTENTICACIÓN Y SALA
+// ───────────────────────────────────────────
 socket.on("signin status", (data) => {
   console.log("📋 signin status:", JSON.stringify(data, null, 2));
   if (data.isSignedIn) {
@@ -76,116 +177,74 @@ socket.on("error", (data) => {
   console.error("❌ Socket error:", JSON.stringify(data, null, 2));
 });
 
+// ───────────────────────────────────────────
+// CHAT
+// ───────────────────────────────────────────
 socket.on("chat update", (data) => {
   if (data.username === myUsername) return;
 
   const msg = data.diff?.text || "";
   const username = data.username;
+  const lower = msg.trim().toLowerCase();
 
-  if (!msg.trim()) {
-    if (userBuffers[username]) {
-      clearTimeout(userBuffers[username].timer);
-      const finalText = userBuffers[username].text.trim();
-      delete userBuffers[username];
-      if (finalText) {
-        console.log(`💬 Mensaje enviado por ${username}: ${finalText}`);
-        handleMessage(username, data.location || "?", finalText);
-      }
-    }
-    return;
+  const startsWithAI = lower.startsWith("/ai ");
+  const endsWithEnd = lower.endsWith(" /end") || lower.endsWith("/end");
+
+  if (startsWithAI && endsWithEnd) {
+    let cleanText = msg.trim().slice(3).trim();
+    const lastEnd = cleanText.toLowerCase().lastIndexOf("/end");
+    cleanText = cleanText.slice(0, lastEnd).trim();
+
+    if (!cleanText) return;
+
+    const messageKey = `${username}:${cleanText}`;
+    if (processedMessages[messageKey]) return;
+    processedMessages[messageKey] = true;
+    setTimeout(() => { delete processedMessages[messageKey]; }, 30000);
+
+    console.log(`📥 Mensaje confirmado de ${username}: "${cleanText}"`);
+    messageQueue.push({
+      username,
+      location: data.location || "?",
+      text: cleanText,
+      timestamp: Date.now()
+    });
+    console.log(`📋 Cola: ${messageQueue.length} mensaje(s) pendiente(s)`);
+    processQueue();
   }
-
-  if (!userBuffers[username]) {
-    userBuffers[username] = { text: "", location: data.location || "?", timer: null };
-  }
-
-  userBuffers[username].text = msg;
-  userBuffers[username].location = data.location || "?";
-
-  clearTimeout(userBuffers[username].timer);
-  userBuffers[username].timer = setTimeout(() => {
-    const finalText = userBuffers[username]?.text.trim();
-    delete userBuffers[username];
-    if (finalText) {
-      console.log(`💬 Mensaje completo de ${username}: ${finalText}`);
-      handleMessage(username, data.location || "?", finalText);
-    }
-  }, TYPING_TIMEOUT);
 });
 
 socket.on("afk warning", () => {
   socket.emit("afk response");
 });
 
-async function handleMessage(username, location, text) {
-  try {
-    const reply = await askAI(username, location, text);
-    if (reply) {
-      console.log("🤖 Respondiendo:", reply);
-      const chunks = reply.match(/.{1,200}/g) || [];
-      for (const chunk of chunks) {
-        socket.emit("chat update", {
-          diff: { type: "full-replace", text: chunk }
-        });
-        await new Promise(r => setTimeout(r, 300));
-      }
+// ───────────────────────────────────────────
+// CLOUDFLARE AI
+// ───────────────────────────────────────────
+async function askAI(username, text) {
+  const messages = buildMessages(username, text);
+
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${CF_API_TOKEN}`
+      },
+      body: JSON.stringify({
+        messages,
+        max_tokens: 150,
+        temperature: 0.7,
+      })
     }
-  } catch (err) {
-    console.error("❌ Error consultando IA:", err.message);
-  }
-}
+  );
 
-async function askAI(username, location, text) {
-  for (const model of MODELS) {
-    try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-          "HTTP-Referer": "https://talkomatic.co",
-          "X-Title": "TalkomaticBot"
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: "system",
-              content: "You are a female chat bot on Talkomatic. Respond naturally and briefly, like a real girl chatting. Ignore spam or nonsense text. Maximum 2 sentences. Always write in English."
-            },
-            {
-              role: "user",
-              content: `${username} / ${location}: ${text}`
-            }
-          ],
-          max_tokens: 150,
-          temperature: 0.7,
-        })
-      });
-
-      if (res.status === 429) {
-        console.warn(`⚠️ ${model} rate limited, probando siguiente...`);
-        continue;
-      }
-
-      if (!res.ok) {
-        const errText = await res.text();
-        console.warn(`⚠️ Error con ${model}: ${errText}`);
-        continue;
-      }
-
-      const data = await res.json();
-      const reply = data?.choices?.[0]?.message?.content?.trim();
-      if (reply) {
-        console.log(`✅ Respondió con modelo: ${model}`);
-        return reply;
-      }
-
-    } catch (err) {
-      console.warn(`⚠️ Error con ${model}:`, err.message);
-    }
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Cloudflare AI HTTP ${res.status}: ${errText}`);
   }
 
-  console.error("❌ Todos los modelos fallaron");
-  return null;
+  const data = await res.json();
+  return data?.result?.response?.trim() || null;
 }
