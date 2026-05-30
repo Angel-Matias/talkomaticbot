@@ -1,10 +1,11 @@
 const { io } = require("socket.io-client");
+require("dotenv").config(); // carga las variables desde .env
 
 const SERVER_URL = "https://classic.talkomatic.co";
-const BOT_TOKEN = "tk_0c37ae4c5e6f3c2b28f616d84e87437b521d3b868822e532608e2454c2a597ea";
-const CF_ACCOUNT_ID = "b72377f238161daf45392c0103b56281";
-const CF_API_TOKEN = "cfut_icMGh2VPOSIygUDAHdpT0EjExP0Yt9vsZkcuvcnJcff674d7";
-const ROOM_ID = "925527";
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID;
+const CF_API_TOKEN = process.env.CF_API_TOKEN;
+const ROOM_ID = process.env.ROOM_ID || "925527"; // usa ROOM_ID del .env o el valor por defecto
 
 const socket = io(SERVER_URL, {
   auth: { token: BOT_TOKEN },
