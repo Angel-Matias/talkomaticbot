@@ -24,38 +24,45 @@ async function processQueue() {
   if (isProcessing || messageQueue.length === 0) return;
   isProcessing = true;
 
-  const { username, location, text, timestamp } = messageQueue.shift();
-  console.log(`⏳ Procesando mensaje de ${username} (${new Date(timestamp).toLocaleTimeString()}): ${text}`);
+  // Tomar hasta 5 mensajes de la cola
+  const batch = messageQueue.splice(0, 5);
 
-  try {
-    const reply = await askAI(username, location, text);
-    if (reply) {
-      console.log("🤖 Respondiendo:", reply);
-      const chunks = reply.match(/.{1,200}/g) || [];
-      for (const chunk of chunks) {
-        socket.emit("chat update", {
-          diff: { type: "full-replace", text: chunk }
-        });
-        await new Promise(r => setTimeout(r, 300));
+  const replies = [];
+  for (const { username, location, text, timestamp } of batch) {
+    console.log(`⏳ Procesando mensaje de ${username} (${new Date(timestamp).toLocaleTimeString()}): ${text}`);
+    try {
+      const reply = await askAI(username, location, text);
+      if (reply) {
+        // Formato limpio: Usuario: respuesta
+        replies.push(`${username}: ${reply}`);
       }
-
-      if (messageQueue.length > 0) {
-        console.log(`📋 Hay ${messageQueue.length} mensaje(s) en cola, borrando en 5s...`);
-        await new Promise(r => setTimeout(r, 5000));
-        socket.emit("chat update", {
-          diff: { type: "full-replace", text: "" }
-        });
-        await new Promise(r => setTimeout(r, 500));
-      } else {
-        console.log("📭 Cola vacía, dejando respuesta visible...");
-      }
+    } catch (err) {
+      console.error("❌ Error consultando IA:", err.message);
     }
-  } catch (err) {
-    console.error("❌ Error consultando IA:", err.message);
+  }
+
+  if (replies.length > 0) {
+    const finalText = replies.join("\n");
+    console.log("🤖 Respondiendo:\n" + finalText);
+
+    socket.emit("chat update", {
+      diff: { type: "full-replace", text: finalText }
+    });
+
+    // Solo borrar si se alcanzaron exactamente 5 respuestas
+    if (replies.length === 5) {
+      console.log("🕔 Se alcanzaron 5 respuestas, borrando en 5s...");
+      await new Promise(r => setTimeout(r, 5000));
+      socket.emit("chat update", {
+        diff: { type: "full-replace", text: "" }
+      });
+    } else {
+      console.log("📭 Menos de 5 respuestas, bloque queda visible...");
+    }
   }
 
   isProcessing = false;
-  processQueue();
+  if (messageQueue.length > 0) processQueue();
 }
 
 const originalOnevent = socket.onevent;
@@ -160,11 +167,12 @@ async function askAI(username, location, text) {
         messages: [
           {
             role: "system",
-            content: "You are a female chat bot on Talkomatic. Respond naturally and briefly, like a real girl chatting. Ignore spam or nonsense text. Maximum 2 sentences. Always write in English."
+            content: "You are GeminiBot, a female chat bot on Talkomatic. Respond neutrally, concisely, and in the user language. Ignore spam or nonsense. Maximum 2 sentences. Do NOT prefix your answer with GeminiBot or the user name."
           },
           {
             role: "user",
-            content: `${username} / ${location}: ${text}`
+            // Solo nombre y texto
+            content: `${username}: ${text}`
           }
         ],
         max_tokens: 150,
@@ -179,5 +187,13 @@ async function askAI(username, location, text) {
   }
 
   const data = await res.json();
-  return data?.result?.response?.trim() || null;
+  let reply = data?.result?.response?.trim() || null;
+
+  // Limpieza: quitar "GeminiBot:" o "username:" si aparecen al inicio
+  if (reply) {
+    reply = reply.replace(/^GeminiBot:\s*/i, "");
+    reply = reply.replace(new RegExp(`^${username}:\\s*`, "i"), "");
+  }
+
+  return reply;
 }
