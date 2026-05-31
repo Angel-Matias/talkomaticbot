@@ -5,7 +5,7 @@ const SERVER_URL = "https://classic.talkomatic.co";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID;
 const CF_API_TOKEN = process.env.CF_API_TOKEN;
-const ROOM_ID = process.env.ROOM_ID || "925527"; // usa ROOM_ID del .env o el valor por defecto
+const ROOM_ID = process.env.ROOM_ID || "770276"; // usa ROOM_ID del .env o el valor por defecto
 
 const socket = io(SERVER_URL, {
   auth: { token: BOT_TOKEN },
