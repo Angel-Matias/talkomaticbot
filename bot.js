@@ -1,11 +1,11 @@
 const { io } = require("socket.io-client");
-require("dotenv").config(); // carga las variables desde .env
+require("dotenv").config();
 
 const SERVER_URL = "https://classic.talkomatic.co";
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID;
 const CF_API_TOKEN = process.env.CF_API_TOKEN;
-const ROOM_ID = process.env.ROOM_ID || "770276"; // usa ROOM_ID del .env o el valor por defecto
+const ROOM_ID = process.env.ROOM_ID;
 
 const socket = io(SERVER_URL, {
   auth: { token: BOT_TOKEN },
@@ -16,56 +16,6 @@ const socket = io(SERVER_URL, {
 let myUsername = null;
 let isInRoom = false;
 
-// ───────────────────────────────────────────
-// MEMORIA - historial compartido de toda la sala
-// Guarda los últimos 30 mensajes de todos los usuarios
-// ───────────────────────────────────────────
-const conversationHistory = [];
-const MAX_HISTORY = 30;
-
-function addToHistory(role, username, content) {
-  conversationHistory.push({ role, username, content });
-  if (conversationHistory.length > MAX_HISTORY) {
-    conversationHistory.shift();
-  }
-}
-
-function buildMessages(currentUsername, currentText) {
-  const messages = [
-    {
-      role: "system",
-      content: `You are a female AI chat bot on Talkomatic chatting with multiple people at once. 
-Respond naturally and briefly like a real girl chatting. Maximum 2 sentences. Always write in the language of the user.`
-    }
-  ];
-
-  // ✅ Agregar todo el historial de conversación
-  for (const entry of conversationHistory) {
-    if (entry.role === "user") {
-      messages.push({
-        role: "user",
-        content: `${entry.username}: ${entry.content}`
-      });
-    } else {
-      messages.push({
-        role: "assistant",
-        content: entry.content
-      });
-    }
-  }
-
-  // ✅ Agregar el mensaje actual
-  messages.push({
-    role: "user",
-    content: `${currentUsername}: ${currentText}`
-  });
-
-  return messages;
-}
-
-// ───────────────────────────────────────────
-// COLA DE MENSAJES
-// ───────────────────────────────────────────
 const messageQueue = [];
 let isProcessing = false;
 const processedMessages = {};
@@ -77,17 +27,10 @@ async function processQueue() {
   const { username, location, text, timestamp } = messageQueue.shift();
   console.log(`⏳ Procesando mensaje de ${username} (${new Date(timestamp).toLocaleTimeString()}): ${text}`);
 
-  // ✅ Guardar el mensaje del usuario en el historial
-  addToHistory("user", username, text);
-
   try {
-    const reply = await askAI(username, text);
+    const reply = await askAI(username, location, text);
     if (reply) {
       console.log("🤖 Respondiendo:", reply);
-
-      // ✅ Guardar la respuesta de la IA en el historial
-      addToHistory("assistant", "GeminiBot", reply);
-
       const chunks = reply.match(/.{1,200}/g) || [];
       for (const chunk of chunks) {
         socket.emit("chat update", {
@@ -115,9 +58,6 @@ async function processQueue() {
   processQueue();
 }
 
-// ───────────────────────────────────────────
-// INTERCEPTOR
-// ───────────────────────────────────────────
 const originalOnevent = socket.onevent;
 socket.onevent = function(packet) {
   const eventName = packet.data?.[0];
@@ -127,9 +67,6 @@ socket.onevent = function(packet) {
   originalOnevent.call(this, packet);
 };
 
-// ───────────────────────────────────────────
-// CONEXIÓN
-// ───────────────────────────────────────────
 socket.on("connect", () => {
   console.log("✅ Conectado a Talkomatic");
   socket.emit("join lobby", { username: "GeminiBot", location: "Servidor Ángel" });
@@ -144,9 +81,6 @@ socket.on("disconnect", (reason) => {
   isInRoom = false;
 });
 
-// ───────────────────────────────────────────
-// AUTENTICACIÓN Y SALA
-// ───────────────────────────────────────────
 socket.on("signin status", (data) => {
   console.log("📋 signin status:", JSON.stringify(data, null, 2));
   if (data.isSignedIn) {
@@ -175,9 +109,6 @@ socket.on("error", (data) => {
   console.error("❌ Socket error:", JSON.stringify(data, null, 2));
 });
 
-// ───────────────────────────────────────────
-// CHAT
-// ───────────────────────────────────────────
 socket.on("chat update", (data) => {
   if (data.username === myUsername) return;
 
@@ -216,12 +147,7 @@ socket.on("afk warning", () => {
   socket.emit("afk response");
 });
 
-// ───────────────────────────────────────────
-// CLOUDFLARE AI
-// ───────────────────────────────────────────
-async function askAI(username, text) {
-  const messages = buildMessages(username, text);
-
+async function askAI(username, location, text) {
   const res = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`,
     {
@@ -231,7 +157,16 @@ async function askAI(username, text) {
         "Authorization": `Bearer ${CF_API_TOKEN}`
       },
       body: JSON.stringify({
-        messages,
+        messages: [
+          {
+            role: "system",
+            content: "You are a female chat bot on Talkomatic. Respond naturally and briefly, like a real girl chatting. Ignore spam or nonsense text. Maximum 2 sentences. Always write in English."
+          },
+          {
+            role: "user",
+            content: `${username} / ${location}: ${text}`
+          }
+        ],
         max_tokens: 150,
         temperature: 0.7,
       })
